@@ -14,3 +14,5 @@ public interface AccessorBlockStateContainer {
     @Accessor("palette")
     IBlockStatePalette trollGetPalette();
 }
+
+// no way bro
