@@ -33,7 +33,7 @@ concurrency:
   group: "latest"
   cancel-in-progress: true
 
-jobs:
+  jobs:
   build:
     runs-on: ubuntu-latest
     permissions: write-all
