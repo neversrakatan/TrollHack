@@ -1,91 +1,67 @@
-
-
-name: Java CI with Gradle
+name: NightlyBuild
 
 on:
-  push:
-    branches: [ "master" ]
-  pull_request:
-    branches: [ "master" ]
+    push:
+        branches:
+            - dev
+    workflow_dispatch:
 
 jobs:
-  build:
+    build:
+        runs-on: ubuntu-latest
 
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
+        steps:
+            -   name: Check out repository
+                uses: actions/checkout@v2
 
-    steps:
-    - uses: actions/checkout@v4
-    - name: Set up JDK 17
-      uses: actions/setup-java@v4
-      with:
-        java-version: '17'
-        distribution: 'temurin'
+            -   name: Set up JDK
+                uses: actions/setup-java@v1
+                with:
+                    java-version: 17
 
-    # Configure Gradle for optimal use in GiHub Actions, including caching of downloaded dependencies.
-    # See: https://github.com/gradle/actions/blob/main/setup-gradle/README.md
-    - name: Setup Gradle
-      uses: gradle/actions/setup-gradle@417ae3ccd767c252f5661f1ace9f835f9654f2b5 # v3.1.0
-      
+            -   name: Extra Gradle cache
+                uses: actions/cache@v3
+                with:
+                    path: |
+                        ~/.gradle/caches/fast-remapper
+                        ~/.gradle/caches/forge_gradle
+                    key: ${{ runner.os }}-extra-${{ hashFiles('~/.gradle/caches/fast-remapper', '~/.gradle/caches/forge_gradle') }}
+                    restore-keys: |
+                        ${{ runner.os }}-extra-
+            -   name: Get version
+                run: |
+                    devVer=$(grep modVersion gradle.properties | grep -o '.\..\..')
+                    commitHash=$(git rev-parse --short HEAD)
+                    modVer=$devVer-nightly-$commitHash
+                    echo modVer=$modVer >> $GITHUB_ENV
+            -   name: Gradle assemble
+                uses: burrunan/gradle-cache-action@v1
+                env:
+                    OVERRIDE_VERSION: ${{ env.modVer }}
+                with:
+                    concurrent: true
+                    arguments: --build-cache assemble
 
-concurrency:
-  group: "latest"
-  cancel-in-progress: true
+            -   name: Copy jar
+                env:
+                    modVer: ${{ env.modVer }}
+                run: |
+                    cp build/libs/TrollHack-$modVer.jar TrollHack-$modVer.jar
+            -   name: Upload jar
+                uses: actions/upload-artifact@v2
+                with:
+                    name: nightly-build
+                    path: TrollHack-${{ env.modVer }}.jar
 
-  jobs:
-  build:
-    runs-on: ubuntu-latest
-    permissions: write-all
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
-        with:
-          java-version: '21'
-          distribution: 'zulu'
-          java-package: 'jdk'
-
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
-
-      - name: Build
-        run: ./gradlew build
-
-      - name: Remove *-sources.jar
-        run: rm ./build/libs/*-sources.jar || true
-
-      - uses: "shxrklol/action-auto-releases-n20@v1.1"
-        with:
-          repo_token: "${{ secrets.GITHUB_TOKEN }}"
-          automatic_release_tag: "latest"
-          prerelease: false
-          title: "Latest Build (1.20.6)"
-          files: |
-            ./build/libs/*.jar
-
-    # NOTE: The Gradle Wrapper is the default and recommended way to run Gradle (https://docs.gradle.org/current/userguide/gradle_wrapper.html).
-    # If your project does not have the Gradle Wrapper configured, you can use the following configuration to run Gradle with a specified version.
-    #
-    # - name: Setup Gradle
-    #   uses: gradle/actions/setup-gradle@417ae3ccd767c252f5661f1ace9f835f9654f2b5 # v3.1.0
-    #   with:
-    #     gradle-version: '8.5'
-    #
-    # - name: Build with Gradle 8.5
-    #   run: gradle build
-
-    # Generates and submits a dependency graph, enabling Dependabot Alerts for all project dependencies.
-    # See: https://github.com/gradle/actions/blob/main/dependency-submission/README.md
-    - name: Remove *-sources.jar
-      run: rm ./build/libs/*-sources.jar || true
-
-    - uses: "shxrklol/action-auto-releases-n20@v1.1"
-      with:
-        repo_token: "${{ secrets.GITHUB_TOKEN }}"
-        automatic_release_tag: "latest"
-        prerelease: false
-        ttle: "Latest Build (1.20.6)"
-        files: |
-            ./build/libs/*.jar 
+            -   name: Nightly build Discord webhook
+                env:
+                    runID: ${{ github.run_id }}
+                    webhookUrl: ${{ secrets.NIGHTLY_DISCORD_WEBHOOK }}
+                    modVer: ${{ env.modVer }}
+                run: |
+                    commitLongHash=$(git rev-parse HEAD)
+                    nightlyLink="https://nightly.link/$GITHUB_REPOSITORY/actions/runs/$runID/nightly-build.zip"
+                    commitMessage=$(git log --pretty=format:"[%h](https://github.com/$GITHUB_REPOSITORY/commit/%H) %s" -1 --reverse)
+                    json='{"embeds":[{"title":"'$modVer'","url":"https://github.com/'$GITHUB_REPOSITORY'/actions/runs/'$runID'","color":16100025,"description":"**Commit:**\n'$commitMessage'\n\n**Download:**\n[TrollHack-'$modVer'.zip]('$nightlyLink')"}]}'
+                    curl "$webhookUrl" -H "Content-Type:application/json" -X POST -d "$json"
+                    curl "$webhookUrl" -H "Content-Type:multipart/form-data" -v -F "files[0]=@TrollHack-$modVer.jar"
